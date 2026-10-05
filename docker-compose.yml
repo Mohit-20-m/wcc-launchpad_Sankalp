@@ -1,0 +1,114 @@
+# Fixed project name: containers, network and volumes are all prefixed
+# "wcc-launchpad", so this never clashes with other projects on the machine.
+name: wcc-launchpad
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: launchpad_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-launchpad}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-launchpad_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-launchpad}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-launchpad}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - launchpad_net
+    # No ports exposed to the host on purpose — only the backend container
+    # needs to reach Postgres. Nothing outside Docker should touch it directly.
+
+  redis:
+    image: redis:7-alpine
+    container_name: launchpad_redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - launchpad_net
+
+  backend:
+    build:
+      context: ./backend
+    container_name: launchpad_backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-launchpad}:${POSTGRES_PASSWORD:-launchpad_dev_password}@postgres:5432/${POSTGRES_DB:-launchpad}
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET:-change_this_in_production}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      UPLOAD_DIR: /data/uploads
+      WEBHOOK_ALLOW_PRIVATE: ${WEBHOOK_ALLOW_PRIVATE:-false}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8080}
+      PLATFORM_NAME: ${PLATFORM_NAME:-Launchpad}
+      # Email: SendGrid (API key) or any SMTP server -- see .env.example.
+      # Demo/fixture accounts are never emailed.
+      MAIL_PROVIDER: ${MAIL_PROVIDER:-sendgrid}
+      MAIL_FROM: ${MAIL_FROM:-Launchpad <noreply@example.com>}
+      SENDGRID_API_KEY: ${SENDGRID_API_KEY:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
+      MAIL_SKIP_DOMAINS: ${MAIL_SKIP_DOMAINS:-}
+      # Optional: raises GitHub's limit for the code check from ~15 to
+      # thousands of repositories an hour. A token with NO scopes is enough.
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+    volumes:
+      # Team submission files (slides, PDFs...) survive container rebuilds.
+      - uploads_data:/data/uploads
+      # Single source of truth stays the repo-root fixtures.json --
+      # never duplicated into the backend build context.
+      - ./fixtures.json:/app/fixtures.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - launchpad_net
+    # No ports exposed to the host either — the browser only ever talks to
+    # Nginx, which proxies to this container over the internal Docker network.
+
+  nginx:
+    build:
+      context: .
+      dockerfile: nginx/Dockerfile
+    container_name: launchpad_nginx
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${HOST_PORT:-8080}:80"
+    networks:
+      - launchpad_net
+    # This is the ONLY container exposed to the host machine.
+    # The whole app is reached at http://localhost:8080
+    #
+    # There is no separate "frontend" service running here on purpose:
+    # Nginx's own Dockerfile builds the React app in one stage and
+    # serves the resulting static files directly — see nginx/Dockerfile.
+
+networks:
+  launchpad_net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  uploads_data:

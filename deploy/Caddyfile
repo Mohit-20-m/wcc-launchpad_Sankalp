@@ -1,0 +1,7 @@
+# Automatic HTTPS for the domain in $DOMAIN. Caddy also handles WebSocket
+# upgrades and sets X-Forwarded-For to the real visitor IP (it ignores any
+# X-Forwarded-For a visitor sends, so it can't be forged).
+{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy nginx:80
+}

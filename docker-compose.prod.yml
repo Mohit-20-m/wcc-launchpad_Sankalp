@@ -1,0 +1,31 @@
+# Production add-on: automatic HTTPS in front of the normal stack.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# Caddy gets a free Let's Encrypt certificate for $DOMAIN and renews it by
+# itself. In .env, also set HOST_PORT=127.0.0.1:8080 so the plain-HTTP
+# nginx port is reachable only from the server itself, never the internet.
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: launchpad_caddy
+    restart: unless-stopped
+    depends_on:
+      - nginx
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN in .env (e.g. launchpad.example.xyz or 1-2-3-4.sslip.io)}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - launchpad_net
+
+
+volumes:
+  caddy_data:
+  caddy_config:
